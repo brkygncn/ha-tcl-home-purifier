@@ -7,7 +7,13 @@ from homeassistant.components.sensor import (
     SensorEntity,
     SensorStateClass,
 )
-from homeassistant.const import UnitOfEnergy, UnitOfTemperature, UnitOfTime, PERCENTAGE
+from homeassistant.const import (
+    UnitOfEnergy,
+    UnitOfTemperature,
+    UnitOfTime,
+    PERCENTAGE,
+    CONCENTRATION_MICROGRAMS_PER_CUBIC_METER, # <-- NEW IMPORT
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -31,6 +37,55 @@ async def async_setup_entry(
 
     sensors = []
     for device in config_entry.devices:
+        # ----------------------------------------------------------------------
+        # AIR PURIFIER SENSORS (TCL Breeva A5) <-- NEW BLOCK
+        # Assumes SENSOR_AIR_PURIFIER_CL is defined in device_features.py
+        # Value functions map to device.data.<JSON_KEY> from your diagnostics.
+        # ----------------------------------------------------------------------
+        if DeviceFeatureEnum.SENSOR_AIR_PURIFIER_CL in device.supported_features:
+            # 1. PM2.5 Sensor (Value: PM25SensorValue)
+            sensors.append(
+                PM25Sensor(
+                    coordinator=coordinator,
+                    device=device,
+                    type="PM25Value",
+                    name="PM2.5 Value",
+                    value_fn=lambda device: device.data.PM25SensorValue,
+                )
+            )
+            # 2. Filter Life Sensor (Value: filterLifeTime)
+            sensors.append(
+                IntNumberSensor(
+                    coordinator=coordinator,
+                    device=device,
+                    type="FilterLifeTime",
+                    name="Filter Life",
+                    device_classification=SensorDeviceClass.DURATION,
+                    state_classification=SensorStateClass.MEASUREMENT,
+                    native_unit_of_measurement=UnitOfTime.HOURS,
+                    icon_fn=lambda device: "mdi:air-filter",
+                    value_fn=lambda device: device.data.filterLifeTime,
+                )
+            )
+            # 3. VOC Level Sensor (Value: VOCSensorLevel - Raw Index)
+            sensors.append(
+                IntNumberSensor(
+                    coordinator=coordinator,
+                    device=device,
+                    type="VOCLevel",
+                    name="VOC Level Index",
+                    device_classification=SensorDeviceClass.VOLATILE_ORGANIC_COMPOUNDS,
+                    state_classification=SensorStateClass.MEASUREMENT,
+                    native_unit_of_measurement="", 
+                    icon_fn=lambda device: "mdi:chemical-weapon",
+                    value_fn=lambda device: device.data.VOCSensorLevel,
+                )
+            )
+            
+        # ----------------------------------------------------------------------
+        # END NEW BLOCK
+        # ----------------------------------------------------------------------
+
         if DeviceFeatureEnum.SENSOR_CURRENT_TEMPERATURE in device.supported_features:
             sensors.append(
                 TemperatureSensor(
@@ -141,7 +196,7 @@ async def async_setup_entry(
                 )
             )
 
-        if DeviceFeatureEnum.SENSOR_WORK_TIME_DAILY in device.supported_features:            
+        if DeviceFeatureEnum.SENSOR_WORK_TIME_DAILY in device.supported_features:        
             sensors.append(
                 IntNumberSensor(
                     coordinator=coordinator,
@@ -171,6 +226,42 @@ async def async_setup_entry(
 
     async_add_entities(sensors)
 
+# ----------------------------------------------------------------------
+# NEW SENSOR CLASS FOR PM2.5 <-- NEW CLASS
+# ----------------------------------------------------------------------
+class PM25Sensor(TclEntityBase, SensorEntity):
+    """Represents a PM2.5 sensor for the Breeva Air Purifier."""
+    def __init__(
+        self,
+        coordinator: IotDeviceCoordinator,
+        device: Device,
+        type: str,
+        name: str,
+        value_fn,
+    ) -> None:
+        TclEntityBase.__init__(self, coordinator, type, name, device)
+        self.value_fn = value_fn
+
+    @property
+    def device_class(self) -> str:
+        return SensorDeviceClass.PM25
+
+    @property
+    def native_value(self) -> int | float:
+        self.device = self.coordinator.get_device_by_id(self.device.device_id)
+        # PM2.5 is typically an integer or float concentration
+        return float(self.value_fn(self.device)) 
+
+    @property
+    def native_unit_of_measurement(self) -> str | None:
+        return CONCENTRATION_MICROGRAMS_PER_CUBIC_METER
+
+    @property
+    def state_class(self) -> str | None:
+        return SensorStateClass.MEASUREMENT
+# ----------------------------------------------------------------------
+# END NEW CLASS
+# ----------------------------------------------------------------------
 
 class TemperatureSensor(TclEntityBase, SensorEntity):
     def __init__(
